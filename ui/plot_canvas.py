@@ -321,22 +321,24 @@ class PlotCanvas(QWidget):
         self.view_box.scaleBy((1.2, 1.2))
 
 
+"""
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     window = QWidget()
     window.resize(800, 600)
     window.setWindowTitle("高性能光谱画布单元测试")
-    
+
     test_layout = QVBoxLayout(window)
     canvas = PlotCanvas()
     test_layout.addWidget(canvas)
-    
+
     x = np.linspace(350, 1000, 1000)
     y1 = np.sin(x / 50) * 10000 + 15000 + np.random.normal(0, 100, 1000)
     y2 = np.cos(x / 50) * 8000 + 12000 + np.random.normal(0, 100, 1000)
-    
+
     canvas.plot_data(x, y1, "光谱测试曲线 A_ATP6500", normal_color='#1f77b4')
     canvas.plot_data(x, y2, "光谱测试曲线 B_JZh_001", normal_color='#2ca02c')
-    
+
     window.show()
     sys.exit(app.exec())
+"""
