@@ -26,12 +26,16 @@ class SidebarTree(QWidget):
     # 携带参数: 要关闭的文件名称 str
     file_close_requested = pyqtSignal(str)
 
+    # 信号：当用户右键选择计算平均值时触发，携带文件绝对路径列表
+    request_batch_calc = pyqtSignal(list)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.file_items = {}  # 缓存结构: { filename: QTreeWidgetItem_parent }
         self.curve_items = {} # 缓存结构: { curve_name: QTreeWidgetItem_child }
         self.block_signals = False # 用于防止双向联动时产生信号死循环的保护锁
         self.last_emitted_curves = None # 记录上一次成功广播的勾选曲线列表，用于去重
+        self._batch_depth = 0    # 批次加载嵌套计数器，>0 时抑制 emit
         self.init_ui()
 
     def init_ui(self):
@@ -55,13 +59,31 @@ class SidebarTree(QWidget):
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self.show_context_menu)
 
+    def begin_batch_load(self):
+        """
+        开始批量加载：进入批次模式，抑制 add_file 触发画布重绘。
+        与 end_batch_load() 配对使用，支持嵌套。
+        """
+        self._batch_depth += 1
+        self.block_signals = True
+
+    def end_batch_load(self):
+        """
+        结束批量加载：退出批次模式，发射一次变更信号触发画布重绘。
+        """
+        self._batch_depth = max(0, self._batch_depth - 1)
+        if self._batch_depth == 0:
+            self.block_signals = False
+            self.emit_checked_curves()
+
     def add_file(self, filename, curve_names):
         """
         向树中添加一个新文件及其包含的所有曲线子项。
         :param filename: 文件名称 (如 "ATP6500_001.csv")
         :param curve_names: 该文件内的曲线列名称列表 (如 ["列1_value", "列2_value"])
         """
-        # 临时锁住信号，防止添加节点初始化状态时频繁向外发送 tree_selection_changed 信号
+        # 进入批次保护（支持嵌套），防止单个 add_file 也触发画布重绘
+        self._batch_depth += 1
         self.block_signals = True
 
         # 1. 创建顶层父节点（代表文件）
@@ -70,7 +92,7 @@ class SidebarTree(QWidget):
         # 使用 ItemIsAutoTristate 替换 ItemIsTristate，解决新版本 PyQt6 兼容问题
         file_item.setFlags(file_item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsAutoTristate)
         file_item.setCheckState(0, Qt.CheckState.Checked)  # 默认全选
-        
+
         self.file_items[filename] = file_item
 
         # 2. 创建子节点（代表该文件里的每一条数据曲线）
@@ -80,55 +102,64 @@ class SidebarTree(QWidget):
             # 子节点只需要两态复选框
             child_item.setFlags(child_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             child_item.setCheckState(0, Qt.CheckState.Checked)  # 默认全部勾选
-            
+
             # 建立曲线名称到子节点对象的全局索引
             self.curve_items[c_name] = child_item
 
         # 展开该文件节点，方便用户直接看到子曲线
         file_item.setExpanded(True)
-        
-        # 解锁信号
-        self.block_signals = False
-        
-        # 触发一次选中状态改变的广播
-        self.emit_checked_curves()
+
+        # 退出批次保护
+        self._batch_depth -= 1
+        if self._batch_depth == 0:
+            self.block_signals = False
+            self.emit_checked_curves()
 
     def remove_file(self, filename):
         """
         从树中移除指定文件及其所有子项。
+        支持批次模式：若在 begin_batch_load 内调用则推迟 emit。
         """
-        if filename in self.file_items:
-            # 临时加锁，避免移除节点触发 itemChanged 信号
-            self.block_signals = True
-            
-            # 从树控件中彻底移除顶层节点
-            parent_item = self.file_items[filename]
-            index = self.tree.indexOfTopLevelItem(parent_item)
-            self.tree.takeTopLevelItem(index)
-            
-            # 清理子项缓存
-            for i in range(parent_item.childCount()):
-                child = parent_item.child(i)
-                curve_name = child.text(0)
-                if curve_name in self.curve_items:
-                    del self.curve_items[curve_name]
-                    
-            # 清理父项缓存
-            del self.file_items[filename]
-            
+        if filename not in self.file_items:
+            return
+
+        self._batch_depth += 1
+        self.block_signals = True
+
+        # 从树控件中彻底移除顶层节点
+        parent_item = self.file_items[filename]
+        index = self.tree.indexOfTopLevelItem(parent_item)
+        self.tree.takeTopLevelItem(index)
+
+        # 清理子项缓存
+        for i in range(parent_item.childCount()):
+            child = parent_item.child(i)
+            curve_name = child.text(0)
+            if curve_name in self.curve_items:
+                del self.curve_items[curve_name]
+
+        # 清理父项缓存
+        del self.file_items[filename]
+
+        self._batch_depth -= 1
+        if self._batch_depth == 0:
             self.block_signals = False
             self.emit_checked_curves()
 
     def clear_all(self):
         """
-        清空树状图中的所有文件和曲线
+        清空树状图中的所有文件和曲线。
+        支持批次模式。
         """
+        self._batch_depth += 1
         self.block_signals = True
         self.tree.clear()
         self.file_items.clear()
         self.curve_items.clear()
-        self.block_signals = False
-        self.emit_checked_curves()
+        self._batch_depth -= 1
+        if self._batch_depth == 0:
+            self.block_signals = False
+            self.emit_checked_curves()
 
     def on_item_changed(self, item, column):
         """
@@ -160,58 +191,109 @@ class SidebarTree(QWidget):
         self.last_emitted_curves = current_set
         self.tree_selection_changed.emit(checked_curves)
 
+    def get_checked_curve_names(self):
+        """
+        返回当前所有被勾选的曲线名称列表（不含去重逻辑，直接读取界面状态）。
+        供 Ratio 计算等场景查询当前勾选状态。
+        """
+        checked = []
+        for curve_name, item in self.curve_items.items():
+            if item.checkState(0) == Qt.CheckState.Checked:
+                checked.append(curve_name)
+        return checked
+
     def sync_selection_from_canvas(self, selected_curves):
         """
         API：供外部调用。当用户在右侧画布上点击/框选曲线时，反向同步勾选左侧对应的复选框。
-        :param selected_curves: 右侧当前被选中的 ClickablePlotDataItem 曲线对象列表
+        注意：仅勾选被选中的曲线，不取消其他曲线的勾选状态。
+              画布\"选中高亮\"与\"可见性\"是两个独立的概念。
         """
-        # 反向更新时必须锁住信号，否则树改变又会触发画布绘制，导致无限循环
         self.block_signals = True
-        
+
         selected_names = [c.curve_name for c in selected_curves]
-        
-        for curve_name, child_item in self.curve_items.items():
-            if curve_name in selected_names:
-                child_item.setCheckState(0, Qt.CheckState.Checked)
-            else:
-                child_item.setCheckState(0, Qt.CheckState.Unchecked)
-                
-        # 同步更新上一次发送的缓存，防止锁解开后触发冗余广播
-        self.last_emitted_curves = set(selected_names)
+
+        # 仅勾选被选中的项，不取消其他项（选中 ≠ 可见性）
+        for curve_name in selected_names:
+            if curve_name in self.curve_items:
+                self.curve_items[curve_name].setCheckState(0, Qt.CheckState.Checked)
+
         self.block_signals = False
 
     def show_context_menu(self, position):
         """
-        右键快捷菜单生成器
+        右键快捷菜单生成器。
+        文件节点：关闭文件 / 计算平均值。
+        曲线节点：查看曲线属性（预留）。
         """
         item = self.tree.itemAt(position)
         if not item:
             return
-            
+
         menu = QMenu(self)
-        
+
         # 判断点击的是父节点（文件）还是子节点（曲线）
         if item.parent() is None:
             # 选中了顶层文件节点
             filename = item.text(0)
+
+            calc_action = menu.addAction(f"计算平均值: {filename}")
+            menu.addSeparator()
             close_action = menu.addAction(f"关闭文件: {filename}")
-            
-            # 弹出菜单并阻塞等待选择
+
             action = menu.exec(self.tree.viewport().mapToGlobal(position))
-            if action == close_action:
-                # 确认是否关闭
+
+            if action == calc_action:
+                self._emit_calc_for_file(filename)
+            elif action == close_action:
                 reply = QMessageBox.question(
-                    self, '确认关闭', f"是否确定关闭文件 {filename}？\n这会同时从图区移除相关曲线。",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, 
+                    self, '确认关闭',
+                    f"是否确定关闭文件 {filename}？\n这会同时从图区移除相关曲线。",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.No
                 )
                 if reply == QMessageBox.StandardButton.Yes:
                     self.file_close_requested.emit(filename)
         else:
-            # 选中了子曲线节点，未来可以拓展“显示曲线属性”等功能
+            # 选中了子曲线节点
             curve_name = item.text(0)
             info_action = menu.addAction(f"查看曲线属性 (预留)")
             menu.exec(self.tree.viewport().mapToGlobal(position))
+
+    def _emit_calc_for_file(self, display_name):
+        """
+        根据文件的显示名反查绝对路径，发射计算平均值信号。
+        支持多选：若用户选中了多个文件节点，则收集所有选中文件的路径。
+        """
+        from core.data_manager import DataManager
+        dm = DataManager()
+
+        # 建立 display_name → filepath 映射
+        all_specs = dm.get_all_spectra()
+        name_to_path = {s.display_name: s.filepath for s in all_specs}
+
+        # 优先收集当前树中所有被选中的顶层文件节点
+        selected_indices = self.tree.selectedIndexes()
+        file_paths = []
+        seen = set()
+        for idx in selected_indices:
+            tree_item = self.tree.itemFromIndex(idx)
+            if tree_item is not None and tree_item.parent() is None:
+                dname = tree_item.text(0)
+                if dname in seen:
+                    continue
+                seen.add(dname)
+                path = name_to_path.get(dname)
+                if path:
+                    file_paths.append(path)
+
+        # 如果多选没收集到，回退到右键点击的那个文件
+        if not file_paths:
+            path = name_to_path.get(display_name)
+            if path:
+                file_paths.append(path)
+
+        if file_paths:
+            self.request_batch_calc.emit(file_paths)
 
 
 """

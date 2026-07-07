@@ -63,6 +63,13 @@ class VerticalMultiParser(BaseParser):
 
             # 特征 1：格式 B 特征（以 SpcName 开头）
             if probe_lines[0].startswith("SpcName,") or probe_lines[0].startswith("SpcName\t"):
+                # 二次确认：排除横向格式。横向格式的第二行首列为文本标签
+                # （如 "R", "T", "采集光谱"），而非数值波长。
+                if len(probe_lines) >= 2:
+                    second_line_first = re.split(r"[,\t ]+", probe_lines[1])[0].strip()
+                    if not cls.NUM_PATTERN.match(second_line_first):
+                        # 第二行首列非数值 → 这是横向格式，不归本解析器处理
+                        return False
                 return True
 
             # 特征 2：通过“数值比例探测法”盲测数据区

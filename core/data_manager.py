@@ -9,6 +9,7 @@
 import sys
 import os
 import numpy as np
+from PyQt6.QtCore import QSettings
 
 # ----------------------------------------------------
 # 路径兼容性注入：将项目根目录动态添加到 sys.path
@@ -112,11 +113,14 @@ class DataManager:
     def __init__(self):
         if hasattr(self, '_initialized') and self._initialized:
             return
-        
+
         # 核心改变：以绝对路径为存储键的字典 { absolute_filepath: SpectrumData_object }
         self._loaded_spectra = {}
-        self._output_path = ""
         self._initialized = True
+
+        # 从 QSettings 恢复上次的输出路径，实现跨会话持久化
+        self._qsettings = QSettings("OptoAnalysisTech", "SpecViewer")
+        self._output_path = self._qsettings.value("output_path", "", type=str)
 
     def check_file_status(self, filepath):
         """
@@ -204,8 +208,41 @@ class DataManager:
             return spec.get_curve(curve_name)
         return None, None
 
+    def register_computed_result(self, name, x, y):
+        """
+        将计算结果（Mean/Std/Ratio 等）注册为虚拟 SpectrumData。
+        若同名结果已存在，自动追加序号（#2, #3...）确保不覆盖。
+        使用合成路径 __calc__/<name> 避免与真实文件路径冲突。
+
+        :param name: 结果曲线显示名（如 "Mean_(5files)"）
+        :param x: X 轴波长数组
+        :param y: Y 轴强度数组
+        :return: 注册后的 SpectrumData 对象（name 可能已被修改为唯一值）
+        """
+        # 自动去重：若 display_name 已被占用，追加序号
+        existing_names = {s.display_name for s in self._loaded_spectra.values()}
+        unique_name = name
+        counter = 2
+        while unique_name in existing_names:
+            unique_name = f"{name} (#{counter})"
+            counter += 1
+
+        synthetic_path = os.path.abspath(os.path.join("__calc__", unique_name))
+        spec = SpectrumData(
+            filepath=synthetic_path,
+            wavelengths=x,
+            data_matrix=np.atleast_2d(y).T if y.ndim == 1 else y,
+            column_names=[unique_name],
+            metadata={'type': 'computed'},
+            display_name=unique_name
+        )
+        self._loaded_spectra[synthetic_path] = spec
+        return spec
+
     def set_output_path(self, path):
         self._output_path = path
+        # 持久化到 QSettings，下次启动自动恢复
+        self._qsettings.setValue("output_path", path)
 
     def get_output_path(self):
         return self._output_path
