@@ -18,7 +18,7 @@ def export_plot_to_image(plot_widget, output_path):
     :return: 实际写入的文件绝对路径，失败返回 None
     """
     try:
-        exporter = _get_exporter_for_path(output_path)
+        exporter = _get_exporter_for_path(plot_widget, output_path)
         if exporter is None:
             return None
 
@@ -53,9 +53,12 @@ def export_plot_dialog(plot_widget, parent=None, output_dir=None):
     return export_plot_to_image(plot_widget, filepath)
 
 
-def _get_exporter_for_path(filepath):
+def _get_exporter_for_path(plot_widget, filepath):
     """
     根据文件扩展名返回对应的 pyqtgraph 导出器。
+
+    :param plot_widget: pyqtgraph.PlotWidget 实例
+    :param filepath: 输出文件路径（用于判断格式）
     """
     import pyqtgraph as pg
 
@@ -72,16 +75,9 @@ def _get_exporter_for_path(filepath):
         print(f"[导出错误] 不支持的图片格式: {ext}")
         return None
 
-    # pg.exporters API: 创建 exporter 实例时需要传入要导出的 item
-    scene = None
     try:
-        # ImageExporter 和 SVGExporter 的构造函数接受 PlotItem
-        if ext in ('.png', '.svg'):
-            return exporter_cls(plot_widget.plotItem)
-        else:
-            return exporter_cls(plot_widget.plotItem)
+        return exporter_cls(plot_widget.plotItem)
     except TypeError:
-        # 尝试旧版 API
         try:
             return exporter_cls(plot_widget.plotItem.scene())
         except Exception:

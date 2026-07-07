@@ -43,8 +43,10 @@ class ClickablePlotDataItem(pg.PlotDataItem):
     def _on_pyqtgraph_clicked(self, item, ev=None):
         """pyqtgraph 原生点击回调 → 转为带多选信息的自定义信号"""
         modifiers = QApplication.keyboardModifiers()
-        is_multi = (modifiers == Qt.KeyboardModifier.ControlModifier or
-                    modifiers == Qt.KeyboardModifier.ShiftModifier)
+        is_multi = bool(modifiers & (
+            Qt.KeyboardModifier.ControlModifier |
+            Qt.KeyboardModifier.ShiftModifier
+        ))
         self.sigCurveClicked.emit(self, is_multi)
 
     def set_pens(self, normal_pen, selected_pen):
@@ -107,7 +109,7 @@ class DraggableLegend(pg.LegendItem):
         if self.is_dragging and self.drag_start_scene is not None:
             delta = ev.scenePos() - self.drag_start_scene
             new_pos = self.item_start_pos + delta
-            pg.GraphicsWidget.setPos(self, new_pos)
+            self.setPos(new_pos)
             ev.accept()
             return
         super().mouseMoveEvent(ev)
@@ -159,7 +161,7 @@ class PlotCanvas(QWidget):
         # 初始化自定义的可拖拽图例
         self.legend = DraggableLegend(offset=None)
         self.legend.setParentItem(self.plot_widget.plotItem)
-        pg.GraphicsWidget.setPos(self.legend, 30, 30)
+        self.legend.setPos(30, 30)
         self.legend_visible = True
 
         # 绑定空白处点击事件（用于取消选中）
@@ -316,8 +318,10 @@ class PlotCanvas(QWidget):
         将其设为选中状态（支持 Ctrl/Shift 追加选择）。
         """
         modifiers = QApplication.keyboardModifiers()
-        is_multi = (modifiers == Qt.KeyboardModifier.ControlModifier or
-                    modifiers == Qt.KeyboardModifier.ShiftModifier)
+        is_multi = bool(modifiers & (
+            Qt.KeyboardModifier.ControlModifier |
+            Qt.KeyboardModifier.ShiftModifier
+        ))
 
         if not is_multi:
             # 非多选模式：先清空
@@ -325,9 +329,11 @@ class PlotCanvas(QWidget):
                 curve.set_selected(False)
 
         vb = self.view_box
-        # 将 widget 坐标转为 view 坐标
-        top_left = vb.mapToView(widget_rect.topLeft())
-        bottom_right = vb.mapToView(widget_rect.bottomRight())
+        # 将 widget 坐标先转场景坐标，再转 view 数据坐标
+        scene_tl = self.plot_widget.mapToScene(widget_rect.topLeft())
+        scene_br = self.plot_widget.mapToScene(widget_rect.bottomRight())
+        top_left = vb.mapSceneToView(scene_tl)
+        bottom_right = vb.mapSceneToView(scene_br)
 
         x_min, x_max = sorted([top_left.x(), bottom_right.x()])
         y_min, y_max = sorted([top_left.y(), bottom_right.y()])
@@ -346,8 +352,9 @@ class PlotCanvas(QWidget):
                 curve.set_selected(True)
                 any_selected = True
 
-        if any_selected:
-            self.selection_changed.emit(self.get_selected_curves())
+        # 无论是否选中任何曲线，只要操作过就通知外部
+        # （非多选模式下所有曲线已被清空，即使矩形内无任何点）
+        self.selection_changed.emit(self.get_selected_curves())
 
     # ==================================================================
     # 视图控制

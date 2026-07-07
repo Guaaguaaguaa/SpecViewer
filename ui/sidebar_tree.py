@@ -82,38 +82,36 @@ class SidebarTree(QWidget):
         :param filename: 文件名称 (如 "ATP6500_001.csv")
         :param curve_names: 该文件内的曲线列名称列表 (如 ["列1_value", "列2_value"])
         """
-        # 进入批次保护（支持嵌套），防止单个 add_file 也触发画布重绘
         self._batch_depth += 1
         self.block_signals = True
+        try:
+            # 防止同名文件重复添加
+            if filename in self.file_items:
+                self._remove_file_unsafe(filename)
 
-        # 1. 创建顶层父节点（代表文件）
-        file_item = QTreeWidgetItem(self.tree)
-        file_item.setText(0, filename)
-        # 使用 ItemIsAutoTristate 替换 ItemIsTristate，解决新版本 PyQt6 兼容问题
-        file_item.setFlags(file_item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsAutoTristate)
-        file_item.setCheckState(0, Qt.CheckState.Checked)  # 默认全选
+            # 1. 创建顶层父节点（代表文件）
+            file_item = QTreeWidgetItem(self.tree)
+            file_item.setText(0, filename)
+            file_item.setFlags(file_item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsAutoTristate)
+            file_item.setCheckState(0, Qt.CheckState.Checked)
 
-        self.file_items[filename] = file_item
+            self.file_items[filename] = file_item
 
-        # 2. 创建子节点（代表该文件里的每一条数据曲线）
-        for c_name in curve_names:
-            child_item = QTreeWidgetItem(file_item)
-            child_item.setText(0, c_name)
-            # 子节点只需要两态复选框
-            child_item.setFlags(child_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            child_item.setCheckState(0, Qt.CheckState.Checked)  # 默认全部勾选
+            # 2. 创建子节点（代表该文件里的每一条数据曲线）
+            for c_name in curve_names:
+                child_item = QTreeWidgetItem(file_item)
+                child_item.setText(0, c_name)
+                child_item.setFlags(child_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                child_item.setCheckState(0, Qt.CheckState.Checked)
 
-            # 建立曲线名称到子节点对象的全局索引
-            self.curve_items[c_name] = child_item
+                self.curve_items[c_name] = child_item
 
-        # 展开该文件节点，方便用户直接看到子曲线
-        file_item.setExpanded(True)
-
-        # 退出批次保护
-        self._batch_depth -= 1
-        if self._batch_depth == 0:
-            self.block_signals = False
-            self.emit_checked_curves()
+            file_item.setExpanded(True)
+        finally:
+            self._batch_depth -= 1
+            if self._batch_depth == 0:
+                self.block_signals = False
+                self.emit_checked_curves()
 
     def remove_file(self, filename):
         """
@@ -125,26 +123,27 @@ class SidebarTree(QWidget):
 
         self._batch_depth += 1
         self.block_signals = True
+        try:
+            self._remove_file_unsafe(filename)
+        finally:
+            self._batch_depth -= 1
+            if self._batch_depth == 0:
+                self.block_signals = False
+                self.emit_checked_curves()
 
-        # 从树控件中彻底移除顶层节点
+    def _remove_file_unsafe(self, filename):
+        """remove_file 的内部实现（不含批次深度管理，供 add_file 去重复用）。"""
         parent_item = self.file_items[filename]
         index = self.tree.indexOfTopLevelItem(parent_item)
         self.tree.takeTopLevelItem(index)
 
-        # 清理子项缓存
         for i in range(parent_item.childCount()):
             child = parent_item.child(i)
             curve_name = child.text(0)
             if curve_name in self.curve_items:
                 del self.curve_items[curve_name]
 
-        # 清理父项缓存
         del self.file_items[filename]
-
-        self._batch_depth -= 1
-        if self._batch_depth == 0:
-            self.block_signals = False
-            self.emit_checked_curves()
 
     def clear_all(self):
         """
@@ -153,13 +152,15 @@ class SidebarTree(QWidget):
         """
         self._batch_depth += 1
         self.block_signals = True
-        self.tree.clear()
-        self.file_items.clear()
-        self.curve_items.clear()
-        self._batch_depth -= 1
-        if self._batch_depth == 0:
-            self.block_signals = False
-            self.emit_checked_curves()
+        try:
+            self.tree.clear()
+            self.file_items.clear()
+            self.curve_items.clear()
+        finally:
+            self._batch_depth -= 1
+            if self._batch_depth == 0:
+                self.block_signals = False
+                self.emit_checked_curves()
 
     def on_item_changed(self, item, column):
         """
@@ -240,7 +241,7 @@ class SidebarTree(QWidget):
             menu.addSeparator()
             close_action = menu.addAction(f"关闭文件: {filename}")
 
-            action = menu.exec(self.tree.viewport().mapToGlobal(position))
+            action = menu.exec(self.tree.mapToGlobal(position))
 
             if action == calc_action:
                 self._emit_calc_for_file(filename)
@@ -257,7 +258,7 @@ class SidebarTree(QWidget):
             # 选中了子曲线节点
             curve_name = item.text(0)
             info_action = menu.addAction(f"查看曲线属性 (预留)")
-            menu.exec(self.tree.viewport().mapToGlobal(position))
+            menu.exec(self.tree.mapToGlobal(position))
 
     def _emit_calc_for_file(self, display_name):
         """

@@ -48,7 +48,8 @@ def _pchip_interp(x_new, x, y, left=np.nan, right=np.nan):
         result[below] = left
         result[above] = right
         return result
-    except ImportError:
+    except (ImportError, ValueError):
+        # scipy 不可用或数据不兼容（重复 X / 单点等）→ 回退线性插值
         return np.interp(x_new, x, y, left=left, right=right)
 
 
@@ -136,7 +137,7 @@ def mean_from_files(file_paths):
     # ================================================================
     counts = [len(curves) for curves in file_curves.values()]
     unique_counts = set(counts)
-    base_x = all_curves_flat[0][0]  # 首条曲线的 X 轴作为基准
+    base_x = all_curves_flat[0][0].copy()  # 首条曲线的 X 轴副本（避免引用泄漏）
     total_curves = len(all_curves_flat)
 
     # 只有 1 条曲线 → 结果等于原数据，提示用户

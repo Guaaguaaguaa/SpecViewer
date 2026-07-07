@@ -228,10 +228,11 @@ class DataManager:
             counter += 1
 
         synthetic_path = os.path.abspath(os.path.join("__calc__", unique_name))
+        y_arr = np.asarray(y, dtype=float)
         spec = SpectrumData(
             filepath=synthetic_path,
             wavelengths=x,
-            data_matrix=np.atleast_2d(y).T if y.ndim == 1 else y,
+            data_matrix=np.atleast_2d(y_arr).T if y_arr.ndim == 1 else y_arr,
             column_names=[unique_name],
             metadata={'type': 'computed'},
             display_name=unique_name

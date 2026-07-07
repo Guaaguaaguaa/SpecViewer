@@ -377,6 +377,12 @@ class MainWindow(QMainWindow):
         try:
             x, results, warn_msgs = mean_from_files(file_paths)
             if x is None or not results:
+                if warn_msgs:
+                    QMessageBox.warning(self, "均值计算提示",
+                                        "\n".join(warn_msgs))
+                else:
+                    QMessageBox.information(self, "均值计算",
+                        "没有可计算的数据。请检查文件格式和内容。")
                 return
 
             # 注册新结果到侧边栏（DataManager 自动处理同名去重）
@@ -463,7 +469,7 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(
                 f"成功计算 {len(y_list)} 条曲线的平均值", 3000
             )
-        except ValueError as e:
+        except Exception as e:
             QMessageBox.critical(self, "计算错误",
                                  f"平均值计算失败:\n{str(e)}")
 
@@ -489,7 +495,7 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(
                 f"成功计算 {len(y_list)} 条曲线的标准差", 3000
             )
-        except ValueError as e:
+        except Exception as e:
             QMessageBox.critical(self, "计算错误",
                                  f"标准差计算失败:\n{str(e)}")
 
@@ -573,7 +579,7 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(
                 f"成功计算比值: {c1.curve_name} / {c2.curve_name}", 3000
             )
-        except ValueError as e:
+        except Exception as e:
             QMessageBox.critical(self, "计算错误",
                                  f"比值计算失败:\n{str(e)}")
 
@@ -616,7 +622,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "导出提示", "无法获取曲线数据。")
             return
 
-        safe_name = c.curve_name.replace('/', '_').replace('\\', '_')
+        # 清理文件名中的非法字符 (Windows)
+        safe_name = c.curve_name
+        for ch in '<>:"/\\|?*':
+            safe_name = safe_name.replace(ch, '_')
         suggested = os.path.join(
             self._get_default_export_dir(), safe_name + ".csv"
         )
@@ -639,7 +648,10 @@ class MainWindow(QMainWindow):
             return
         curves_dict = {}
         for c in all_curves:
+            # 优先从 DataManager 获取，回退到曲线上的原始数据（批量面板预览曲线）
             x, y = self.data_manager.get_curve_data(c.curve_name)
+            if x is None or y is None:
+                x, y = c.getData()
             if x is not None and y is not None:
                 curves_dict[c.curve_name] = (x, y)
         if not curves_dict:
@@ -753,6 +765,7 @@ class MainWindow(QMainWindow):
         # 批次模式：200 个文件只触发 1 次画布重绘，而非 200 次
         self.sidebar.begin_batch_load()
         success_count = 0
+        batch_displays = {}  # 同批内同名计数: {basename: count}
         try:
             for i, path in enumerate(file_paths):
                 abs_path = os.path.abspath(path)
@@ -768,6 +781,15 @@ class MainWindow(QMainWindow):
 
                 if status == 'NAME_CONFLICT':
                     self.status_bar.showMessage(msg, 4000)
+
+                # 同批内同名检测：防止同一次打开操作中的文件名冲突
+                base = os.path.basename(abs_path)
+                if base in batch_displays:
+                    batch_displays[base] += 1
+                    name_part, ext = os.path.splitext(base)
+                    suggested_disp_name = f"{name_part} ({batch_displays[base]}){ext}"
+                else:
+                    batch_displays[base] = 0
 
                 parser = ParserFactory.get_parser_for_file(abs_path)
                 if not parser:
